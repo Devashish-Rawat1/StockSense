@@ -1,5 +1,5 @@
 """
-pages/shap_explainer.py — Demand Anomaly Explainer using SHAP.
+pages/shap_explainer.py — Demand Explainer using SHAP.
 """
 
 import numpy as np
@@ -8,54 +8,111 @@ import streamlit as st
 import plotly.graph_objects as go
 import plotly.express as px
 
-from src.config import NUM_STORES, NUM_ITEMS, FEATURE_COLS
-from src.data_loader import load_featured_data, train_val_split, get_X_y
+from src.config import NUM_STORES, NUM_ITEMS
+from src.data_loader import load_featured_data, train_val_split
 from src.model_loader import load_xgb_model
+
+
+def _get_model_features(model) -> list[str]:
+    """
+    Safely retrieve the feature names the model was actually trained on.
+    XGBoost stores these in model.feature_names_in_ or get_booster().feature_names.
+    This is the ground truth — we use this, NOT our config's FEATURE_COLS.
+    """
+    # Try sklearn-style attribute first
+    if hasattr(model, "feature_names_in_") and model.feature_names_in_ is not None:
+        return list(model.feature_names_in_)
+    # Try booster-level feature names
+    try:
+        names = model.get_booster().feature_names
+        if names:
+            return names
+    except Exception:
+        pass
+    return None
+
+
+def _align_X(df: pd.DataFrame, model_features: list[str]) -> pd.DataFrame:
+    """
+    Keep only the columns the model was trained on, in the right order.
+    Drop NaN rows after selecting those columns.
+    """
+    available = [f for f in model_features if f in df.columns]
+    missing   = [f for f in model_features if f not in df.columns]
+    if missing:
+        st.warning(f"⚠️ {len(missing)} feature(s) missing from data: `{missing[:5]}...`")
+    X = df[available].dropna()
+    return X
 
 
 def render():
     st.title("🔍 Demand Explainer (SHAP)")
     st.markdown(
-        "**Why did the model predict this demand value?**  \n"
-        "SHAP breaks down every prediction into the contribution of each "
-        "feature — so you know *why* demand is high or low, not just *what* it is."
+        "**Why did the model predict this demand value?** "
+        "SHAP breaks down every prediction into the contribution of each feature."
     )
 
-    # ── Check SHAP installed ──────────────────────────────────────────────────
     try:
         import shap
         shap_available = True
     except ImportError:
         shap_available = False
-        st.warning("SHAP not installed — showing native XGBoost feature importance instead.")
 
-    # ── Controls ──────────────────────────────────────────────────────────────
-    st.sidebar.markdown("## ⚙️ SHAP Controls")
+    st.sidebar.markdown("## ⚙️ Controls")
     store     = st.sidebar.selectbox("Store", list(range(1, NUM_STORES + 1)))
     item      = st.sidebar.selectbox("Item",  list(range(1, NUM_ITEMS  + 1)))
     n_explain = st.sidebar.slider("Rows to explain", 1, 50, 10)
 
-    # ── Load model + data ─────────────────────────────────────────────────────
-    with st.spinner("Loading model and data…"):
+    # ── Load model ────────────────────────────────────────────────────────────
+    with st.spinner("Loading model…"):
         model = load_xgb_model()
-        if model is None:
-            st.error("XGBoost model not found. Ensure `models/xgb_model.joblib` is in your repo.")
-            return
+    if model is None:
+        st.error("XGBoost model not found. Ensure `models/xgb_model.joblib` exists.")
+        return
 
+    # ── Get exact features the model expects ──────────────────────────────────
+    model_features = _get_model_features(model)
+    if model_features:
+        st.sidebar.success(f"Model uses **{len(model_features)} features**")
+    else:
+        st.sidebar.warning("Could not read model feature names — will use all available columns.")
+
+    # ── Load + filter data ────────────────────────────────────────────────────
+    with st.spinner("Loading data…"):
         df = load_featured_data()
-        _, val_df = train_val_split(df)
-        subset_val = val_df[(val_df["store"] == store) & (val_df["item"] == item)]
-        X_val, y_val = get_X_y(subset_val)
+    _, val_df = train_val_split(df)
+    subset = val_df[(val_df["store"] == store) & (val_df["item"] == item)]
 
-    if X_val.empty:
+    if subset.empty:
         st.warning("No validation data for this store/item combination.")
         return
 
-    X_explain = X_val.head(n_explain)
-    y_explain = y_val.head(n_explain)
+    # Align to model's exact feature set
+    if model_features:
+        X_explain = _align_X(subset, model_features)
+    else:
+        # Fallback: drop non-numeric / non-feature columns
+        drop_cols = {"date", "sales"}
+        num_cols  = [c for c in subset.columns if c not in drop_cols
+                     and subset[c].dtype != object]
+        X_explain = subset[num_cols].dropna()
 
-    # ── Try SHAP, fall back to native importance ──────────────────────────────
-    shap_ok = False
+    y_explain = subset.loc[X_explain.index, "sales"] if "sales" in subset.columns else None
+    X_explain = X_explain.head(n_explain)
+    if y_explain is not None:
+        y_explain = y_explain.loc[X_explain.index]
+
+    if X_explain.empty:
+        st.error("No rows left after dropping NaNs. Try a different store/item.")
+        return
+
+    st.caption(f"Explaining **{len(X_explain)}** rows with **{X_explain.shape[1]}** features.")
+
+    # ── Try SHAP ──────────────────────────────────────────────────────────────
+    shap_ok  = False
+    shap_df  = None
+    base_val = None
+
     if shap_available:
         try:
             with st.spinner("Computing SHAP values…"):
@@ -65,23 +122,16 @@ def render():
                 base_val    = float(explainer.expected_value)
             shap_ok = True
         except Exception as e:
-            st.warning(
-                f"⚠️ SHAP TreeExplainer failed (likely an XGBoost version mismatch): `{e}`\n\n"
-                "Showing **native XGBoost feature importance** instead. "
-                "To fully fix this, re-save your model with `xgboost==2.1.4` and redeploy."
-            )
+            st.warning(f"⚠️ SHAP failed: `{str(e)[:200]}`\n\nShowing native feature importance instead.")
 
-    # ── SHAP plots ────────────────────────────────────────────────────────────
+    # ── Render ────────────────────────────────────────────────────────────────
     if shap_ok:
-        _render_shap_plots(model, X_explain, y_explain, shap_df, base_val, store, item, n_explain)
+        _render_shap(model, X_explain, y_explain, shap_df, base_val, store, item, n_explain)
     else:
-        _render_native_importance(model, X_explain, y_explain)
+        _render_native(model, X_explain, y_explain)
 
 
-def _render_shap_plots(model, X_explain, y_explain, shap_df, base_val, store, item, n_explain):
-    import plotly.graph_objects as go
-    import plotly.express as px
-
+def _render_shap(model, X_explain, y_explain, shap_df, base_val, store, item, n_explain):
     # Global importance
     st.markdown("---")
     st.subheader("🌐 Global Feature Importance (Mean |SHAP|)")
@@ -91,7 +141,7 @@ def _render_shap_plots(model, X_explain, y_explain, shap_df, base_val, store, it
         orientation="h", marker_color="#3498DB",
     ))
     fig.update_layout(title="Mean |SHAP| per Feature",
-                      xaxis_title="Mean |SHAP|", template="plotly_dark", height=450)
+                      xaxis_title="Mean |SHAP|", template="plotly_dark", height=500)
     st.plotly_chart(fig, use_container_width=True)
 
     # Waterfall
@@ -103,9 +153,10 @@ def _render_shap_plots(model, X_explain, y_explain, shap_df, base_val, store, it
     pred_val = float(model.predict(row_X.values.reshape(1, -1))[0])
 
     c1, c2, c3 = st.columns(3)
-    c1.metric("Actual Sales",       f"{float(y_explain.iloc[row_idx]):.1f}")
-    c2.metric("Predicted Sales",    f"{pred_val:.1f}")
-    c3.metric("Base (avg) Pred",    f"{base_val:.1f}")
+    if y_explain is not None:
+        c1.metric("Actual Sales", f"{float(y_explain.iloc[row_idx]):.1f}")
+    c2.metric("Predicted Sales", f"{pred_val:.1f}")
+    c3.metric("Base (avg) Pred", f"{base_val:.1f}")
 
     top_idx   = row_shap.abs().sort_values(ascending=False).index[:12]
     feat_shap = [float(row_shap[f]) for f in top_idx]
@@ -134,72 +185,70 @@ def _render_shap_plots(model, X_explain, y_explain, shap_df, base_val, store, it
     fig_heat = px.imshow(
         heat_df, color_continuous_scale="RdBu_r",
         color_continuous_midpoint=0, template="plotly_dark", aspect="auto",
-        title="SHAP Heatmap (top 12 features × explained rows)",
+        title="SHAP Heatmap (top 12 features × rows)",
     )
     st.plotly_chart(fig_heat, use_container_width=True)
-
-    with st.expander("📋 Full SHAP Values Table"):
-        row_shap_sorted = row_shap.abs().sort_values(ascending=False)
-        st.dataframe(pd.DataFrame({
-            "Feature":       row_shap_sorted.index,
-            "Feature Value": [float(row_X[f]) for f in row_shap_sorted.index],
-            "SHAP Value":    [float(row_shap[f]) for f in row_shap_sorted.index],
-        }), use_container_width=True)
 
     with st.expander("📖 How to Read SHAP Values"):
         st.markdown("""
         | | Meaning |
         |-|---------|
-        | **Red bar (positive SHAP)** | Feature **increased** predicted demand |
-        | **Blue bar (negative SHAP)** | Feature **decreased** predicted demand |
+        | 🔴 **Red (positive SHAP)** | Feature **increased** predicted demand |
+        | 🔵 **Blue (negative SHAP)** | Feature **decreased** predicted demand |
         | **Bar length** | How much impact this feature had |
-        | **Base value** | Average prediction across all training data |
-        | **Prediction** = base + sum of all SHAP values | Everything adds up |
+        | **Prediction = base + Σ SHAP values** | All contributions sum up |
         """)
 
 
-def _render_native_importance(model, X_explain, y_explain):
-    """Fallback: show XGBoost's built-in feature importance when SHAP fails."""
-    import plotly.graph_objects as go
-
+def _render_native(model, X_explain, y_explain):
+    """Native XGBoost importance — uses the booster's own feature list, crash-proof."""
     st.markdown("---")
     st.subheader("📊 XGBoost Native Feature Importance")
-    st.caption("SHAP is unavailable due to a version mismatch — showing built-in importance scores.")
 
-    importance = pd.Series(
-        model.feature_importances_,
-        index=X_explain.columns,
-    ).sort_values(ascending=True)
+    # Use the model's own feature names to build the Series safely
+    model_features = _get_model_features(model)
+    importances    = model.feature_importances_  # always length = n_features_in_
+
+    if model_features and len(model_features) == len(importances):
+        index = model_features
+    else:
+        # Last resort: generic names
+        index = [f"f{i}" for i in range(len(importances))]
+
+    importance = pd.Series(importances, index=index).sort_values(ascending=True)
+    top20      = importance.tail(20)  # top 20 most important
 
     fig = go.Figure(go.Bar(
-        x=importance.values,
-        y=importance.index,
-        orientation="h",
-        marker_color="#3498DB",
+        x=top20.values, y=top20.index,
+        orientation="h", marker_color="#3498DB",
     ))
     fig.update_layout(
-        title="XGBoost Feature Importance (gain)",
+        title="Top 20 Features by XGBoost Importance (gain)",
         xaxis_title="Importance Score",
-        template="plotly_dark",
-        height=500,
+        template="plotly_dark", height=500,
     )
     st.plotly_chart(fig, use_container_width=True)
 
-    # Simple prediction table
-    st.markdown("---")
-    st.subheader("🔮 Predictions vs Actual")
-    preds = model.predict(X_explain).clip(0)
-    result = X_explain.copy()
-    result["actual"]    = y_explain.values
-    result["predicted"] = preds.round(2)
-    result["error"]     = (result["actual"] - result["predicted"]).round(2)
-    st.dataframe(result[["actual", "predicted", "error"]].reset_index(drop=True),
-                 use_container_width=True)
+    # Predictions vs Actual table
+    if not X_explain.empty:
+        st.markdown("---")
+        st.subheader("🔮 Predictions vs Actual")
+        try:
+            preds = model.predict(X_explain).clip(0)
+            result = pd.DataFrame({
+                "predicted": preds.round(2),
+            }, index=X_explain.index)
+            if y_explain is not None:
+                result.insert(0, "actual", y_explain.values)
+                result["error"] = (result["actual"] - result["predicted"]).round(2)
+            st.dataframe(result.reset_index(drop=True), use_container_width=True)
+        except Exception as e:
+            st.error(f"Prediction failed: {e}")
 
     st.info(
-        "💡 **To restore full SHAP explanations:** re-save your XGBoost model "
-        "locally using `xgboost==2.1.4`, push the new `models/xgb_model.joblib` "
-        "to GitHub, and redeploy."
+        "💡 **To get full SHAP waterfall charts**, ensure the features passed "
+        "to the explainer exactly match what the model was trained on. "
+        "Check that `src/config.py` → `FEATURE_COLS` matches your training notebook."
     )
 
 
