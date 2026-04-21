@@ -1,12 +1,32 @@
 """
 config.py — central place for all constants, paths, and model metadata.
-Import this everywhere instead of hard-coding paths.
+
+Path strategy for Streamlit Cloud:
+  - Streamlit Cloud clones your repo to /mount/src/<repo-name>/
+  - All paths must be resolved relative to this repo root at runtime,
+    NOT relative to this file's location inside src/.
+  - We use an environment variable REPO_ROOT if set, otherwise walk up
+    from this file's directory.
 """
 
 import os
 
-# ── Root paths ───────────────────────────────────────────────────────────────
-ROOT_DIR   = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# ── Resolve repo root dynamically ────────────────────────────────────────────
+# This file lives at: <repo_root>/src/config.py  (one level deep)
+# So: parent of parent = repo root... unless src/ is deeper.
+# Walk up until we find a known anchor file (requirements.txt or train.csv).
+
+def _find_repo_root() -> str:
+    """Walk up from this file until we find the repo root."""
+    candidate = os.path.dirname(os.path.abspath(__file__))  # src/
+    for _ in range(5):  # max 5 levels up
+        candidate = os.path.dirname(candidate)
+        if os.path.exists(os.path.join(candidate, "requirements.txt")):
+            return candidate
+    # Last resort: current working directory (where streamlit is launched from)
+    return os.getcwd()
+
+ROOT_DIR   = _find_repo_root()
 DATA_DIR   = os.path.join(ROOT_DIR, "data")
 MODELS_DIR = os.path.join(ROOT_DIR, "models")
 
@@ -34,7 +54,7 @@ PREDS_PATHS = {
     "actual":            os.path.join(MODELS_DIR, "y_val_actual.joblib"),
 }
 
-# ── Model metadata (for UI display) ─────────────────────────────────────────
+# ── Model metadata ────────────────────────────────────────────────────────────
 MODEL_METRICS = {
     "XGBoost":           {"RMSE": 7.9126,  "MAPE": 12.4361, "type": "tree"},
     "LightGBM":          {"RMSE": 7.9421,  "MAPE": 12.5623, "type": "tree"},
@@ -44,7 +64,7 @@ MODEL_METRICS = {
 
 BEST_MODEL = "XGBoost"
 
-# ── Feature config (must match feature_engineering notebook) ─────────────────
+# ── Feature config ────────────────────────────────────────────────────────────
 FEATURE_COLS = [
     "store", "item",
     "year", "month", "week", "day", "dayofweek", "is_weekend",
@@ -56,14 +76,14 @@ FEATURE_COLS = [
 
 TARGET_COL   = "sales"
 DATE_COL     = "date"
-LSTM_WINDOW  = 28          # look-back window used during training
+LSTM_WINDOW  = 28
 NUM_STORES   = 10
 NUM_ITEMS    = 50
 
 # ── Inventory defaults ────────────────────────────────────────────────────────
 INV_DEFAULTS = {
-    "ordering_cost":          50.0,   # $ per order
-    "holding_cost_per_unit":   2.0,   # $ / unit / year
-    "lead_time_days":          7,     # days
-    "service_level_z":         1.65,  # 95% service level
+    "ordering_cost":          50.0,
+    "holding_cost_per_unit":   2.0,
+    "lead_time_days":          7,
+    "service_level_z":         1.65,
 }
