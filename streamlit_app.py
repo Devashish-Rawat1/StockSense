@@ -17,13 +17,13 @@ st.sidebar.title("📦 Demand Forecasting")
 st.sidebar.caption("E-Commerce Forecasting Dashboard")
 
 PAGES = {
-    "🏠 Home":               "pages/home.py",
-    "📊 EDA":                "pages/eda.py",
-    "🤖 Forecast":           "pages/forecast.py",
-    "📈 Model Comparison":   "pages/model_comparison.py",
-    "🏭 Inventory Planner":  "pages/inventory.py",
-    "📤 Batch Predict":      "pages/batch_predict.py",
-    "🔍 SHAP Explainer":     "pages/shap_explainer.py",
+    " Home":               "pages/home.py",
+    " EDA":                "pages/eda.py",
+    " Forecast":           "pages/forecast.py",
+    " Model Comparison":   "pages/model_comparison.py",
+    " Inventory Planner":  "pages/inventory.py",
+    " Batch Predict":      "pages/batch_predict.py",
+    " SHAP Explainer":     "pages/shap_explainer.py",
 }
 
 page = st.sidebar.radio("Navigate", list(PAGES.keys()))
