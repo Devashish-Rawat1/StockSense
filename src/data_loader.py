@@ -1,11 +1,9 @@
 """
-data_loader.py
-Handles all data loading & feature engineering.
-Uses st.cache_data to avoid reloading on every interaction.
+data_loader.py — All data loading & feature engineering.
 
-Key design: load_featured_data() tries the pre-built CSV first.
-If it doesn't exist (common on Streamlit Cloud where processed/
-files are gitignored), it builds features on-the-fly from train.csv.
+Feature names match EXACTLY what the XGBoost/LightGBM models were trained on:
+  store_avg_sales  = mean sales per store (across all items/dates)
+  item_avg_sales   = mean sales per item  (across all stores/dates)
 """
 
 import os
@@ -24,11 +22,10 @@ from src.config import (
 
 @st.cache_data(show_spinner=False)
 def load_raw_data() -> pd.DataFrame:
-    """Load the raw train.csv. Raises a clean error if missing."""
     if not os.path.exists(RAW_DATA_PATH):
         st.error(
-            f"❌ Raw data file not found: `{RAW_DATA_PATH}`\n\n"
-            "Make sure `data/raw/train.csv` is committed to your GitHub repo."
+            f"❌ Raw data not found: `{RAW_DATA_PATH}`\n\n"
+            "Ensure `data/raw/train.csv` is committed to your GitHub repo."
         )
         st.stop()
     df = pd.read_csv(RAW_DATA_PATH, parse_dates=[DATE_COL])
@@ -39,31 +36,48 @@ def load_raw_data() -> pd.DataFrame:
 @st.cache_data(show_spinner=False)
 def load_featured_data() -> pd.DataFrame:
     """
-    Load the feature-engineered dataset.
-    - If data/processed/featured_data.csv exists → load it directly (fast).
-    - Otherwise → build features from train.csv on-the-fly (slower, ~30s, cached after).
-    This handles the common case where processed/ is gitignored.
+    Load featured dataset. Falls back to building from train.csv if
+    the processed CSV isn't in the repo (e.g. gitignored due to size).
     """
     if os.path.exists(FEATURED_DATA_PATH):
         df = pd.read_csv(FEATURED_DATA_PATH, parse_dates=[DATE_COL])
-        df.sort_values([DATE_COL], inplace=True)
+        # Rename legacy column names if the CSV was built with old code
+        df = _rename_legacy_columns(df)
+        df.sort_values(DATE_COL, inplace=True)
         return df
 
-    # Fallback: build from raw data
     st.info(
         "⚙️ `data/processed/featured_data.csv` not found — "
-        "building features from `train.csv`. This runs once and is then cached.",
+        "building features from `train.csv`. Cached after first run.",
         icon="ℹ️",
     )
     raw = load_raw_data()
-    featured = _build_features(raw)
-    return featured
+    return _build_features(raw)
 
 
-# ── Feature engineering (mirrors the notebook pipeline exactly) ───────────────
+def _rename_legacy_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Handle old column names that may exist in a pre-built featured_data.csv.
+    Maps them to the names the saved models actually expect.
+    """
+    rename_map = {
+        "store_item_avg":  "store_avg_sales",   # old name → correct name
+        "rolling_std_7":   "rolling_std_7",      # these are fine, just listed
+        "rolling_std_14":  "rolling_std_14",
+        "rolling_std_28":  "rolling_std_28",
+    }
+    # Only rename columns that actually exist
+    actual_renames = {k: v for k, v in rename_map.items() if k in df.columns}
+    if actual_renames:
+        df = df.rename(columns=actual_renames)
+    return df
+
 
 def _build_features(df: pd.DataFrame) -> pd.DataFrame:
-    """Full pipeline: time → lag → rolling → aggregate."""
+    """
+    Full feature engineering pipeline.
+    Output columns match EXACTLY what the trained models expect (see FEATURE_COLS).
+    """
     df = df.copy()
     df = df.sort_values(["store", "item", DATE_COL]).reset_index(drop=True)
 
@@ -80,80 +94,52 @@ def _build_features(df: pd.DataFrame) -> pd.DataFrame:
     for lag in [1, 7, 14, 28]:
         df[f"sales_lag_{lag}"] = grp.shift(lag)
 
-    # 3. Rolling features (shift(1) avoids data leakage)
+    # 3. Rolling mean features (shift(1) prevents data leakage)
     shifted = grp.shift(1)
     for w in [7, 14, 28]:
         df[f"rolling_mean_{w}"] = shifted.rolling(w).mean().values
-        df[f"rolling_std_{w}"]  = shifted.rolling(w).std().values
 
-    # 4. Store-item average (aggregate feature)
-    store_item_avg = (
-        df.groupby(["store", "item"])[TARGET_COL]
+    # 4. Aggregate features — named to match what the model was trained on
+    store_avg = (
+        df.groupby("store")[TARGET_COL]
         .mean()
-        .rename("store_item_avg")
+        .rename("store_avg_sales")
         .reset_index()
     )
-    df = df.merge(store_item_avg, on=["store", "item"], how="left")
+    item_avg = (
+        df.groupby("item")[TARGET_COL]
+        .mean()
+        .rename("item_avg_sales")
+        .reset_index()
+    )
+    df = df.merge(store_avg, on="store", how="left")
+    df = df.merge(item_avg,  on="item",  how="left")
 
     return df
 
 
-# ── Public aliases (kept for backward compatibility) ─────────────────────────
+# ── Public aliases ────────────────────────────────────────────────────────────
 
 def build_features(df: pd.DataFrame) -> pd.DataFrame:
     return _build_features(df)
 
-def add_time_features(df: pd.DataFrame) -> pd.DataFrame:
-    df = df.copy()
-    df["year"]       = df[DATE_COL].dt.year
-    df["month"]      = df[DATE_COL].dt.month
-    df["week"]       = df[DATE_COL].dt.isocalendar().week.astype(int)
-    df["day"]        = df[DATE_COL].dt.day
-    df["dayofweek"]  = df[DATE_COL].dt.dayofweek
-    df["is_weekend"] = df["dayofweek"].isin([5, 6]).astype(int)
-    return df
 
-def add_lag_features(df: pd.DataFrame, lags=(1, 7, 14, 28)) -> pd.DataFrame:
-    df = df.copy()
-    for lag in lags:
-        df[f"sales_lag_{lag}"] = df.groupby(["store", "item"])[TARGET_COL].shift(lag)
-    return df
-
-def add_rolling_features(df: pd.DataFrame, windows=(7, 14, 28)) -> pd.DataFrame:
-    df = df.copy()
-    shifted = df.groupby(["store", "item"])[TARGET_COL].shift(1)
-    for w in windows:
-        df[f"rolling_mean_{w}"] = shifted.rolling(w).mean().values
-        df[f"rolling_std_{w}"]  = shifted.rolling(w).std().values
-    return df
-
-def add_aggregate_features(df: pd.DataFrame) -> pd.DataFrame:
-    df = df.copy()
-    agg = (
-        df.groupby(["store", "item"])[TARGET_COL]
-        .mean()
-        .rename("store_item_avg")
-        .reset_index()
-    )
-    return df.merge(agg, on=["store", "item"], how="left")
-
-
-# ── Train / Val splits ────────────────────────────────────────────────────────
+# ── Train / Val split ─────────────────────────────────────────────────────────
 
 def train_val_split(df: pd.DataFrame, val_start: str = "2017-01-01"):
-    train = df[df[DATE_COL] < val_start].copy()
-    val   = df[df[DATE_COL] >= val_start].copy()
-    return train, val
+    return (
+        df[df[DATE_COL] < val_start].copy(),
+        df[df[DATE_COL] >= val_start].copy(),
+    )
 
 
 def get_X_y(df: pd.DataFrame):
-    """Return feature matrix X and target vector y, dropping NaN rows."""
     available = [c for c in FEATURE_COLS if c in df.columns]
-    subset = df[available + [TARGET_COL]].dropna()
+    subset    = df[available + [TARGET_COL]].dropna()
     return subset[available], subset[TARGET_COL]
 
 
-# ── LSTM sequence builder ─────────────────────────────────────────────────────
+# ── LSTM helpers ──────────────────────────────────────────────────────────────
 
 def create_sequences(series: np.ndarray, window: int = LSTM_WINDOW):
     if series.ndim == 1:
@@ -165,7 +151,7 @@ def create_sequences(series: np.ndarray, window: int = LSTM_WINDOW):
     return np.array(X), np.array(y)
 
 
-# ── Uploaded CSV validation ───────────────────────────────────────────────────
+# ── Upload validation ─────────────────────────────────────────────────────────
 
 def validate_uploaded_csv(df: pd.DataFrame) -> tuple[bool, str]:
     required = {DATE_COL, "store", "item"}

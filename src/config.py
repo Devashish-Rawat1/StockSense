@@ -66,12 +66,12 @@ BEST_MODEL = "XGBoost"
 
 # ── Feature config ────────────────────────────────────────────────────────────
 FEATURE_COLS = [
+    # Exact feature names the XGBoost/LightGBM models were trained on
     "store", "item",
     "year", "month", "week", "day", "dayofweek", "is_weekend",
     "sales_lag_1", "sales_lag_7", "sales_lag_14", "sales_lag_28",
     "rolling_mean_7", "rolling_mean_14", "rolling_mean_28",
-    "rolling_std_7", "rolling_std_14", "rolling_std_28",
-    "store_item_avg",
+    "store_avg_sales", "item_avg_sales",
 ]
 
 TARGET_COL   = "sales"
