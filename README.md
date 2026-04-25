@@ -1,6 +1,6 @@
-# E-Commerce Demand Forecasting
+# StockSense — Demand Forecasting & Inventory Optimization
 
-A production-ready demand forecasting system for e-commerce businesses — predicting future product demand to optimize inventory and reduce stockouts and overstocking.
+A production-ready retail intelligence system that predicts future product demand and translates forecasts into actionable inventory decisions — helping e-commerce businesses reduce stockouts, eliminate overstocking, and optimize working capital.
 
 **Live Demo:** [e-commerce-demand-forecasting.streamlit.app](https://e-commerce-demand-forecasting-mjlqjwbeigqfx8abcq8mua.streamlit.app/)
 
@@ -8,7 +8,7 @@ A production-ready demand forecasting system for e-commerce businesses — predi
 
 ## Overview
 
-Retail businesses face a recurring challenge: how much inventory to stock. Overstock ties up capital; understock loses sales. This project builds an end-to-end forecasting pipeline that takes raw historical sales data, trains four different models, evaluates them, and translates the best forecast into actionable inventory decisions — all accessible through an interactive dashboard.
+Retail businesses face a recurring challenge: how much inventory to stock. Overstock ties up capital; understock loses sales. StockSense builds an end-to-end forecasting pipeline that takes raw historical sales data, trains four different models, evaluates them, and translates the best forecast into actionable inventory decisions — all accessible through an interactive dashboard.
 
 The dataset covers 5 years of daily sales (2013–2017) across 10 stores and 50 products, totaling ~913,000 records.
 
@@ -58,7 +58,7 @@ Explains individual predictions using SHAP (SHapley Additive exPlanations). Show
 ## Repository Structure
 
 ```
-E-commerce-Demand-Forecasting/
+StockSense/
 │
 ├── streamlit_app.py                  # Streamlit entry point
 ├── requirements.txt                  # Python dependencies
@@ -151,7 +151,7 @@ Where D = annual demand, S = ordering cost, h = holding cost per unit, Z = servi
 ```bash
 # Clone the repository
 git clone https://github.com/Devashish-Rawat1/E-commerce-Demand-Forecasting.git
-cd E-commerce-Demand-Forecasting
+cd StockSense
 
 # Create and activate virtual environment
 python -m venv venv

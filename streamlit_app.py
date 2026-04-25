@@ -1,20 +1,20 @@
 """
-E-Commerce Demand Forecasting — Streamlit App
+StockSense — Streamlit App
 Entry point: runs the multi-page navigation shell.
 """
 
 import streamlit as st
 
 st.set_page_config(
-    page_title="E-Commerce Demand Forecasting",
+    page_title="StockSense",
     page_icon="📦",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
 # ── Sidebar navigation ──────────────────────────────────────────────────────
-st.sidebar.title("📦 Demand Forecasting")
-st.sidebar.caption("E-Commerce Forecasting Dashboard")
+st.sidebar.title("📦 StockSense")
+st.sidebar.caption("StockSense Dashboard")
 
 PAGES = {
     " Home":               "pages/home.py",
