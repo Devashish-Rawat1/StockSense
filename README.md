@@ -1,4 +1,4 @@
-# StockSense — Demand Forecasting & Inventory Optimization
+# DemandSense — Demand Forecasting & Inventory Optimization
 
 A production-ready retail intelligence system that predicts future product demand and translates forecasts into actionable inventory decisions — helping e-commerce businesses reduce stockouts, eliminate overstocking, and optimize working capital.
 

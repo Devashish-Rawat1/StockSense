@@ -5,7 +5,7 @@ from src.config import MODEL_METRICS, BEST_MODEL
 
 
 def render():
-    st.title("StockSense — Demand Forecasting & Inventory Optimization")
+    st.title("DemandSense — Demand Forecasting & Inventory Optimization")
     st.markdown(
         "**Predict future product demand to optimize inventory and reduce "
         "stockouts & overstocking.**"
