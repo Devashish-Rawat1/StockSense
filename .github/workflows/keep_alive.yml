@@ -1,0 +1,47 @@
+name: Keep Streamlit App Alive
+
+on:
+  schedule:
+    - cron: '0 */1 * * *'   # Runs every 6 hours automatically
+  workflow_dispatch:          # Also lets you run it manually
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install Playwright
+        run: |
+          pip install playwright
+          playwright install chromium --with-deps
+
+      - name: Wake up the Streamlit app
+        run: |
+          python -c "
+          from playwright.sync_api import sync_playwright
+          import sys
+
+          url = 'https://e-commerce-demand-forecasting-mjlqjwbeigqfx8abcq8mua.streamlit.app/'
+
+          with sync_playwright() as p:
+              browser = p.chromium.launch()
+              page = browser.new_page()
+              print('Visiting app...')
+              try:
+                  page.goto(url, wait_until='networkidle', timeout=90000)
+                  print('Page title:', page.title())
+                  print('App is awake!')
+              except Exception as e:
+                  print('Error:', e)
+                  sys.exit(1)
+              finally:
+                  browser.close()
+          "
